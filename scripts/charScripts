@@ -7,8 +7,6 @@ public class PlayerMovement : MonoBehaviour
     public float runSpeed = 40f;
     public float jumpForce = 5f; // Force applied when jumping
     public float fastFallMultiplier = 2f; // Multiplier for fast-fall speed
-    public float acceleration = 10f; // Speed at which the character accelerates to the target velocity
-    public float deceleration = 10f; // Speed at which the character decelerates to a stop
 
     private float horizontalMove = 0f;
     private bool jump = false;
@@ -50,12 +48,9 @@ public class PlayerMovement : MonoBehaviour
 
     void FixedUpdate()
     {
-        // Smooth horizontal movement using Lerp
-        float targetSpeed = horizontalMove * Time.fixedDeltaTime;
-        float smoothedSpeed = Mathf.Lerp(rb.velocity.x, targetSpeed, (horizontalMove != 0 ? acceleration : deceleration) * Time.fixedDeltaTime);
-
-        // Set the smoothed velocity
-        rb.velocity = new Vector2(smoothedSpeed, rb.velocity.y);
+        // Horizontal movement
+        Vector2 targetVelocity = new Vector2(horizontalMove * Time.fixedDeltaTime, rb.velocity.y);
+        rb.velocity = targetVelocity;
 
         // Apply jump force
         if (jump)
