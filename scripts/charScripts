@@ -1,0 +1,30 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class charScript : MonoBehaviour
+{
+   
+    // Start is called before the first frame update
+    Rigidbody2D _rb;
+    public float speed = 5f;
+
+    void Start()
+    {
+        _rb = gameObject.GetComponent<Rigidbody2D>();
+    }
+
+    // Update is called once per frame
+    void Update()
+    {
+     float inputHoriz = Input.GetAxisRaw("Horizontal");
+     
+     if(inputHoriz != 0){
+        _rb.transform.position = new Vector2 (transform.position.x + (inputHoriz * speed * Time.deltaTime), transform.position.y);
+     }
+    }
+
+    void FixedUpdate(){
+        
+    }
+}
