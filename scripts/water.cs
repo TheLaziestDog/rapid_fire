@@ -19,6 +19,12 @@ public class water : MonoBehaviour
     [SerializeField] private LayerMask boostSurfaces;
     [SerializeField] private Rigidbody2D playerRigidbody;
 
+    [Header("Water Storage Settings")]
+    [SerializeField] private float maxStorage = 100f; // Maximum water storage
+    [SerializeField] private float refillRate = 10f;  // Rate at which water refills
+    [SerializeField] private float consumptionRate = 20f; // Water consumption per second of spraying
+    private float currentStorage; // Current water storage
+
     private GameObject currentWater;
     private bool _isHolding;
     private float _currentScale;
@@ -27,9 +33,14 @@ public class water : MonoBehaviour
     private Vector2 _lastHitNormal;
     private float _maxScale; // Store the maximum scale when hitting something
 
+    private void Start()
+    {
+        currentStorage = maxStorage; // Initialize storage to full
+    }
+
     private void OnSpray(InputValue value)
     {
-        if (value.isPressed)
+        if (value.isPressed && currentStorage > 0)
         {
             StartSpray();
         }
@@ -41,6 +52,8 @@ public class water : MonoBehaviour
 
     private void StartSpray()
     {
+        if (currentStorage <= 0) return; // Prevent spraying if no water is left
+
         _isHolding = true;
         _collisionDetected = false;
         _currentScale = minScale;
@@ -63,9 +76,28 @@ public class water : MonoBehaviour
     {
         if (_isHolding && currentWater != null)
         {
-            CheckCollisionAndUpdateMaxScale();
-            UpdateWaterStream();
+            if (currentStorage > 0)
+            {
+                currentStorage -= consumptionRate * Time.deltaTime; // Decrease storage
+                currentStorage = Mathf.Max(currentStorage, 0); // Clamp to zero
+                CheckCollisionAndUpdateMaxScale();
+                UpdateWaterStream();
+            }
+            else
+            {
+                StopSpray(); // Stop spraying if storage is depleted
+            }
         }
+        else
+        {
+            RefillWater(); // Refill storage when not spraying
+        }
+    }
+
+    private void RefillWater()
+    {
+        currentStorage += refillRate * Time.deltaTime;
+        currentStorage = Mathf.Min(currentStorage, maxStorage); // Clamp to maxStorage
     }
 
     private void CheckCollisionAndUpdateMaxScale()
@@ -121,10 +153,7 @@ public class water : MonoBehaviour
     public void ApplyBoost()
     {
         Vector2 waterDirection = (cursor.position - hoseTip.position).normalized;
-        Debug.Log("water dir. : " + waterDirection);
         Vector2 boostDirection = -waterDirection;
-        Debug.Log("boost dir. : " + boostDirection);
-        Debug.Log("force : " + boostDirection * boostForce);
 
         playerRigidbody.AddForce(boostDirection * boostForce, ForceMode2D.Impulse);
         
