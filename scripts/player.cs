@@ -50,22 +50,15 @@ public class player : MonoBehaviour
 
             float direction = Mathf.Sign(horizInput.x);
             character.FlipX(direction);
-
-            float hoseAngle = direction > 0 ? 0 : 170;
-            _hosePivot.rotation = Quaternion.Euler(0, 0, hoseAngle);
         }
     }
 
     private void OnJump(InputValue value){
-        jump = value.isPressed;
-        Debug.Log("jump!");
-        /*
-        jump = value.isPressed;
-        if (jump &&  Mathf.Abs(_rb.velocity.y) < 0.01f){
-            _rb.AddForce(new Vector2(0f, _jumpForce), ForceMode2D.Impulse);
-            jump = false;
+        if (value.isPressed)
+        {
+            jump = value.isPressed;
+            Debug.Log("jump!");
         }
-        */
     }
 
     private void OnLook(InputValue value){
