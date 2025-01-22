@@ -16,15 +16,16 @@ public class water : MonoBehaviour
     
     [Header("Boost Settings")]
     [SerializeField] private float boostForce = 10f;
-    [SerializeField] private LayerMask boostSurfaces; // Surfaces that can be used for boosting
-    [SerializeField] private Rigidbody2D playerRigidbody; // Reference to player's rigidbody
+    [SerializeField] private LayerMask boostSurfaces;
+    [SerializeField] private Rigidbody2D playerRigidbody;
 
     private GameObject currentWater;
     private bool _isHolding;
     private float _currentScale;
     private float _targetScale;
     private bool _collisionDetected;
-    private Vector2 _lastHitNormal; // Store the normal of the surface we hit
+    private Vector2 _lastHitNormal;
+    private float _maxScale; // Store the maximum scale when hitting something
 
     private void OnSpray(InputValue value)
     {
@@ -43,14 +44,10 @@ public class water : MonoBehaviour
         _isHolding = true;
         _collisionDetected = false;
         _currentScale = minScale;
+        _maxScale = float.MaxValue; // Reset max scale
 
         currentWater = Instantiate(waterPrefab, hoseTip.position, hoseRotation.rotation);
-        Vector3 waterScale = currentWater.transform.localScale;
-        waterScale.x = _currentScale;
-        currentWater.transform.localScale = waterScale;
-
-        // Check for surfaces that can be used for boosting
-        CheckForBoostSurface();
+        UpdateWaterStream();
     }
 
     private void StopSpray()
@@ -66,41 +63,29 @@ public class water : MonoBehaviour
     {
         if (_isHolding && currentWater != null)
         {
-            // Calculate target scale based on distance to cursor
-            _targetScale = Vector2.Distance(hoseTip.position, cursor.position);
-            _currentScale = Mathf.MoveTowards(_currentScale, _targetScale, scaleSpeed * Time.deltaTime);
-
-            // Apply scale
-            Vector3 waterScale = currentWater.transform.localScale;
-            waterScale.x = _currentScale;
-            waterScale.z = 0;
-            currentWater.transform.localScale = waterScale;
-
-            // Continuously check for boost surfaces
-            CheckForBoostSurface();
+            CheckCollisionAndUpdateMaxScale();
+            UpdateWaterStream();
         }
     }
 
-    private void CheckForBoostSurface()
+    private void CheckCollisionAndUpdateMaxScale()
     {
         Vector2 direction = (cursor.position - hoseTip.position).normalized;
-        float distance = Vector2.Distance(hoseTip.position, cursor.position);
         
-        // Use multiple raycasts or a boxcast for better collision detection
         RaycastHit2D hit = Physics2D.BoxCast(
-            hoseTip.position,          // origin
-            new Vector2(0.2f, 0.2f),   // size of the box
-            Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg, // angle
-            direction,                 // direction
-            distance,                 // distance
-            boostSurfaces            // layer mask
+            hoseTip.position,
+            new Vector2(0.2f, 0.2f),
+            currentWater.transform.eulerAngles.z,
+            direction,
+            Vector2.Distance(hoseTip.position, cursor.position),
+            boostSurfaces
         );
         
         if (hit.collider != null)
         {
-            _lastHitNormal = hit.normal;
             _collisionDetected = true;
-            Debug.Log($"Collision detected with normal: {_lastHitNormal}");
+            _maxScale = hit.distance; // Set max scale to the collision distance
+            
             if (_isHolding)
             {
                 ApplyBoost();
@@ -108,20 +93,41 @@ public class water : MonoBehaviour
         }
     }
 
-    // Call this method when player jumps
+    private void UpdateWaterStream()
+    {
+        // Update water position to always start from hose tip
+        currentWater.transform.position = hoseTip.position;
+        
+        // Calculate direction to cursor
+        Vector2 directionToCursor = (cursor.position - hoseTip.position).normalized;
+        
+        // Update water rotation to point towards cursor
+        float angle = Mathf.Atan2(directionToCursor.y, directionToCursor.x) * Mathf.Rad2Deg;
+        currentWater.transform.rotation = Quaternion.Euler(0, 0, angle);
+        
+        // Calculate target scale, but don't exceed max scale from collision
+        float distanceToCursor = Vector2.Distance(hoseTip.position, cursor.position);
+        _targetScale = Mathf.Min(distanceToCursor, _maxScale);
+        _currentScale = Mathf.MoveTowards(_currentScale, _targetScale, scaleSpeed * Time.deltaTime);
+        
+        // Apply scale - only stretch on X axis to maintain water thickness
+        Vector3 waterScale = currentWater.transform.localScale;
+        waterScale.x = _currentScale;
+        waterScale.y = waterScale.y; // Keep original Y scale
+        waterScale.z = 0;
+        currentWater.transform.localScale = waterScale;
+    }
+
     public void ApplyBoost()
     {
-        // Calculate the actual water direction from hoseTip to cursor
         Vector2 waterDirection = (cursor.position - hoseTip.position).normalized;
-        Debug.Log(waterDirection);
-        
-        // Calculate boost direction based on water direction and surface normal
-        Vector2 boostDirection = Vector2.Reflect(waterDirection, _lastHitNormal).normalized;
-        
-        // Apply the boost force
+        Debug.Log("water dir. : " + waterDirection);
+        Vector2 boostDirection = -waterDirection;
+        Debug.Log("boost dir. : " + boostDirection);
+        Debug.Log("force : " + boostDirection * boostForce);
+
         playerRigidbody.AddForce(boostDirection * boostForce, ForceMode2D.Impulse);
         
-        // Visual feedback remains the same
         if (currentWater != null)
         {
             Vector3 waterScale = currentWater.transform.localScale;
