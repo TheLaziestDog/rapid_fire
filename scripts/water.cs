@@ -1,21 +1,26 @@
+
 using System.Collections;
 using System.Collections.Generic;
+using Unity.Burst.Intrinsics;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
 public class water : MonoBehaviour
 {
-    [Header("Water Settings")]
-    [SerializeField] private GameObject waterPrefab;
+    [Header("External")]
     [SerializeField] private Transform hoseTip;
     [SerializeField] private Transform hoseRotation;
-    [SerializeField] private Transform cursor;
+    [SerializeField] private Transform cursor;    
+    [SerializeField] private player playerScript;
+
+    [Header("Water Settings")]
+    [SerializeField] private GameObject waterPrefab;
     [SerializeField] private float waterLifetime = 1f;
     [SerializeField] private float minScale = 0.05f;
     [SerializeField] private float scaleSpeed = 0.05f;
     
     [Header("Boost Settings")]
-    [SerializeField] private float boostForce = 10f;
+    [SerializeField] private float boostForce = 0.05f;
     [SerializeField] private LayerMask boostSurfaces;
     [SerializeField] private Rigidbody2D playerRigidbody;
 
@@ -151,7 +156,8 @@ public class water : MonoBehaviour
     }
 
     public void ApplyBoost()
-    {
+    {        
+        playerScript.SwitchHorizLock(true);
         Vector2 waterDirection = (cursor.position - hoseTip.position).normalized;
         Vector2 boostDirection = -waterDirection;
 
