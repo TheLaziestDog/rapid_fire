@@ -8,6 +8,7 @@ public class player : MonoBehaviour
     [Header("Move")]
     [SerializeField] private float _speed = 7f;
     [SerializeField] private float _jumpForce = 5f;
+    private float interpolationWeight = 1f;
 
     [Header("Look")]
     [SerializeField]
@@ -46,6 +47,7 @@ public class player : MonoBehaviour
 
         if (horizInput.x != 0)
         {
+            SwitchHorizLock(false);
             isControlledByCursor = false;
 
             float direction = Mathf.Sign(horizInput.x);
@@ -66,12 +68,26 @@ public class player : MonoBehaviour
         _mouseWorldPos = Camera.main.ScreenToWorldPoint(value.Get<Vector2>());
     }
 
+    public void SwitchHorizLock(bool value){
+        // true = boost. false = walk
+        if (value){
+            interpolationWeight = 0.1f;
+        } else {
+            interpolationWeight = 0.9f;
+        }
+    }
+
     private void FixedUpdate(){
         _isGrounded = Physics2D.OverlapCircle(_groundCheck.position, _groundCheckRadius, _groundLayer);
 
         // Only modify x velocity
-        _rb.velocity = new Vector2(horizInput.x * _speed, _rb.velocity.y);
-        
+        //_rb.velocity = new Vector2(horizInput.x * _speed, _rb.velocity.y);
+        Vector2 movement = new Vector2(horizInput.x * _speed, _rb.velocity.y);
+        _rb.velocity = new Vector2(
+            Mathf.Lerp(_rb.velocity.x, movement.x, interpolationWeight), 
+            _rb.velocity.y
+        );
+
         // Only allow jumping if grounded
         if (jump && _isGrounded){
             _rb.AddForce(new Vector2(0f, _jumpForce), ForceMode2D.Impulse);
