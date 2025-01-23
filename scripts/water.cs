@@ -1,3 +1,6 @@
+/*
+Pressure control based on the distance
+*/
 
 using System.Collections;
 using System.Collections.Generic;
@@ -18,9 +21,10 @@ public class water : MonoBehaviour
     [SerializeField] private float waterLifetime = 1f;
     [SerializeField] private float minScale = 0.05f;
     [SerializeField] private float scaleSpeed = 0.05f;
+    [SerializeField] private float maxTreshold = 10f;
     
     [Header("Boost Settings")]
-    [SerializeField] private float boostForce = 0.05f;
+    [SerializeField] private float boostForce = 0.1f;
     [SerializeField] private LayerMask boostSurfaces;
     [SerializeField] private Rigidbody2D playerRigidbody;
 
@@ -79,6 +83,9 @@ public class water : MonoBehaviour
 
     private void Update()
     {
+        float distance = Vector2.Distance(hoseTip.position, cursor.position);
+        Debug.Log($"Distance between hose and cursor: {distance}");
+
         if (_isHolding && currentWater != null)
         {
             if (currentStorage > 0)
@@ -161,7 +168,11 @@ public class water : MonoBehaviour
         Vector2 waterDirection = (cursor.position - hoseTip.position).normalized;
         Vector2 boostDirection = -waterDirection;
 
-        playerRigidbody.AddForce(boostDirection * boostForce, ForceMode2D.Impulse);
+        float distanceToMax = Vector2.Distance(hoseTip.position, cursor.position);
+        float boostMultiplier = 1f - Mathf.Clamp01(distanceToMax / maxTreshold);
+        float finalBoostForce = boostForce * boostMultiplier;   
+
+        playerRigidbody.AddForce(boostDirection * finalBoostForce, ForceMode2D.Impulse);
         
         if (currentWater != null)
         {
