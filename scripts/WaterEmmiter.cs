@@ -18,6 +18,7 @@ public class FluidParticle
     public float pressure;
     public float lifetime;
     public bool isFollowingPath;
+     public bool isDestroyed;
     // Add these new variables to store initial path information
     public Vector3 initialEmissionPoint;
     public Vector3 initialTargetDirection;
@@ -33,18 +34,19 @@ public class FluidParticle
         isFollowingPath = true;
         initialEmissionPoint = emissionPoint;
         initialTargetDirection = targetDir;
+        isDestroyed = false;
     }
 }
 
 public class WaterEmitter : MonoBehaviour
 {
     [Header("Path Control")]
-    [SerializeField] [Range(0f, 1f)] private float pressure = 1f;  // Controls how far particles follow the path
-    [SerializeField] private float pathWidth = 0.1f;  // How wide the stream can deviate from the path
-    [SerializeField] private float minPathFollowDistance = 1f;  // Minimum distance particles follow path
-    [SerializeField] private float maxPathFollowDistance = 10f;  // Maximum distance particles follow path
-    [SerializeField] private float fallSpeed = 9.81f;  // How fast particles fall after leaving path
-    [SerializeField] private float pathFollowStrength = 10f;  // How strongly particles stick to path
+    [SerializeField] [Range(0f, 1f)] private float pressure = 1f;
+    [SerializeField] private float pathWidth = 0.1f;
+    [SerializeField] private float minPathFollowDistance = 1f;
+    [SerializeField] private float maxPathFollowDistance = 10f;
+    [SerializeField] private float fallSpeed = 9.81f;
+    [SerializeField] private float pathFollowStrength = 10f;
     
     [Header("External References")]
     [SerializeField] private Transform cursor;
@@ -65,6 +67,10 @@ public class WaterEmitter : MonoBehaviour
     [SerializeField] private LayerMask breakableWall;
     [SerializeField] private LayerMask waterPushableLayer;
     [SerializeField] private LayerMask fireLayer;
+    [SerializeField] private LayerMask particleCollisionMask;
+
+    [Header("Collision Settings")]
+    [SerializeField] private float collisionCheckRadius = 0.1f;
 
     [Header("Simulation Parameters")]
     [SerializeField] private float particleMass = 0.02f;
@@ -74,7 +80,6 @@ public class WaterEmitter : MonoBehaviour
     [SerializeField] private float viscosityConstant = 0.1f;
     [SerializeField] private float particleLifetime = 5f;
     [SerializeField] private Vector3 gravity = new Vector3(0, -9.81f, 0);
-    [SerializeField] private float floorY = 0f;
     
     [Header("Emission Settings")]
     [SerializeField] private float emissionRate = 100f;
@@ -186,56 +191,62 @@ public class WaterEmitter : MonoBehaviour
     }
 
     private void UpdatePositions()
-{
-    float dt = Time.deltaTime;
-    float maxPathDistance = GetMaxPathDistance();
-
-    for (int i = 0; i < particles.Count; i++)
     {
-        FluidParticle p = particles[i];
-        
-        // Calculate distance from initial emission point
-        float distanceFromStart = Vector3.Distance(p.initialEmissionPoint, p.position);
+        float dt = Time.deltaTime;
+        float maxPathDistance = GetMaxPathDistance();
 
-        if (p.isFollowingPath && distanceFromStart < maxPathDistance)
+        for (int i = 0; i < particles.Count; i++)
         {
-            // Use stored initial path information
-            Vector3 targetPoint = GetTargetPointOnPath(p);
+            FluidParticle p = particles[i];
             
-            // Add randomness for width
-            Vector3 randomOffset = Random.insideUnitSphere * pathWidth;
-            randomOffset.z = 0; // Keep it 2D
-            targetPoint += randomOffset;
+            if (p.isDestroyed) continue;
 
-            // Calculate force towards the path
-            Vector3 towardsPath = (targetPoint - p.position);
-            p.force = towardsPath * pathFollowStrength;
+            float distanceFromStart = Vector3.Distance(p.initialEmissionPoint, p.position);
 
-            // Use initial direction for base velocity
-            p.velocity = Vector3.Lerp(p.velocity, p.initialTargetDirection * emissionForce, dt * 5f);
-        }
-        else
-        {
-            p.isFollowingPath = false;
-            
-            // Apply gravity and normal fluid forces
-            p.force += Vector3.down * fallSpeed;
-            p.velocity.x *= 0.99f;
-        }
+            if (p.isFollowingPath && distanceFromStart < maxPathDistance)
+            {
+                Vector3 targetPoint = GetTargetPointOnPath(p);
+                Vector3 randomOffset = Random.insideUnitSphere * pathWidth;
+                randomOffset.z = 0;
+                targetPoint += randomOffset;
 
-        // Update velocity and position
-        p.velocity += (p.force / p.density) * dt;
-        p.position += p.velocity * dt;
+                Vector3 towardsPath = (targetPoint - p.position);
+                p.force = towardsPath * pathFollowStrength;
+                p.velocity = Vector3.Lerp(p.velocity, p.initialTargetDirection * emissionForce, dt * 5f);
+            }
+            else
+            {
+                p.isFollowingPath = false;
+                p.force += Vector3.down * fallSpeed;
+                p.velocity.x *= 0.99f;
+            }
 
-        // Floor collision
-        if (p.position.y < floorY)
-        {
-            p.position.y = floorY;
-            p.velocity.y = -p.velocity.y * 0.3f;
-            p.velocity.x *= 0.8f;
+            p.velocity += (p.force / p.density) * dt;
+            Vector3 newPosition = p.position + p.velocity * dt;
+
+            if (CheckParticleCollision(p.position, newPosition))
+            {
+                p.isDestroyed = true;
+                continue;
+            }
+
+            p.position = newPosition;
         }
     }
-}
+
+    private bool CheckParticleCollision(Vector3 currentPos, Vector3 nextPos)
+    {
+        // Cast a small circle between current and next position to check for collisions
+        RaycastHit2D hit = Physics2D.CircleCast(
+            currentPos,
+            collisionCheckRadius,
+            (nextPos - currentPos).normalized,
+            Vector3.Distance(currentPos, nextPos),
+            particleCollisionMask
+        );
+
+        return hit.collider != null;
+    }
 
     // Raycasts
 
@@ -420,11 +431,8 @@ public class WaterEmitter : MonoBehaviour
         // Iterate backwards for safe removal
         for (int i = particles.Count - 1; i >= 0; i--)
         {
-            // Update lifetime
-            particles[i].lifetime -= dt;
-            
-            // If particle has expired
-            if (particles[i].lifetime <= 0)
+            // Remove particles that are either destroyed or expired
+            if (particles[i].isDestroyed || particles[i].lifetime <= 0)
             {
                 // Destroy visual object
                 Destroy(particleObjects[i]);
@@ -435,7 +443,10 @@ public class WaterEmitter : MonoBehaviour
                 continue;
             }
             
-            // Update visual position for surviving particles
+            // Update lifetime for surviving particles
+            particles[i].lifetime -= dt;
+            
+            // Update visual position
             if (i < particleObjects.Count)
             {
                 particleObjects[i].transform.position = particles[i].position;
@@ -451,10 +462,5 @@ public class WaterEmitter : MonoBehaviour
             Gizmos.DrawWireSphere(transform.position, 0.1f);
             Gizmos.DrawRay(transform.position, transform.forward);
         }
-        
-        // Draw floor line
-        Gizmos.color = Color.red;
-        Vector3 floorCenter = new Vector3(transform.position.x, floorY, transform.position.z);
-        Gizmos.DrawLine(floorCenter - Vector3.right * 5f, floorCenter + Vector3.right * 5f);
     }
 }
