@@ -10,8 +10,14 @@ public class FluidParticle
     public float pressure;
     public float lifetime;
     public bool isActive;
+    
+    // Trajectory control
+    public Vector3 origin;
+    public Vector3 destination;
+    public bool hasReachedDestination;
+    public float journeyDistance;
 
-    public FluidParticle(Vector3 pos, float maxLifetime)
+    public FluidParticle(Vector3 pos, float maxLifetime, Vector3 orig, Vector3 dest)
     {
         position = pos;
         velocity = Vector3.zero;
@@ -20,6 +26,11 @@ public class FluidParticle
         pressure = 0f;
         lifetime = maxLifetime;
         isActive = true;
+        
+        origin = orig;
+        destination = dest;
+        hasReachedDestination = false;
+        journeyDistance = Vector3.Distance(orig, dest);
     }
 }
 
@@ -38,6 +49,25 @@ public struct SPHParameters
 
 public class SPHSimulation : MonoBehaviour
 {
+    [Header("Original Interaction Layers")]
+    [SerializeField] private LayerMask boostSurfaces;
+    [SerializeField] private LayerMask enemyLayer;
+    [SerializeField] private LayerMask waterPlatform;
+    [SerializeField] private LayerMask breakableWall;
+    [SerializeField] private LayerMask waterPushableLayer;
+    [SerializeField] private LayerMask fireLayer;
+    [SerializeField] private LayerMask particleCollisionMask;
+
+    [Header("External References")]
+    [SerializeField] private Transform cursor;
+    private BasicMovement playerScript;
+    private Rigidbody2D playerRigidbody;
+
+    [Header("Interaction Settings")]
+    [SerializeField] private float hitArea = 1f;
+    [SerializeField] private Vector2 raycastSize = new Vector2(0.2f, 0.2f);
+    [SerializeField] private float boostForce = 0.1f;
+    
     [Header("Simulation Parameters")]
     [SerializeField] private SPHParameters parameters = new SPHParameters
     {
@@ -74,6 +104,11 @@ public class SPHSimulation : MonoBehaviour
     [SerializeField] private string containerName = "WaterParticles";
     private Transform particleContainer;
 
+    [Header("Trajectory Control")]
+[SerializeField] private float maxTrajectoryDistance = 10f; // Add this variable
+[SerializeField] private float fallSpeed = 9.81f;
+[SerializeField] private float pathWidth = 0.1f;
+[SerializeField] private LayerMask collisionMask;
 
      private void Awake()
     {
@@ -94,6 +129,10 @@ public class SPHSimulation : MonoBehaviour
         visualPool = new Queue<GameObject>(maxParticles);
         activeParticles = new List<FluidParticle>();
         activeVisuals = new List<GameObject>();
+
+        GameObject player = GameObject.FindGameObjectWithTag("Player");
+        playerScript = player.GetComponent<BasicMovement>();
+        playerRigidbody = player.GetComponent<Rigidbody2D>();
     }
 
     private GameObject CreateParticle()
@@ -142,34 +181,45 @@ public class SPHSimulation : MonoBehaviour
     }
     */
 
-    public void EmitParticle(Vector3 position, Vector3 velocity)
+    
+
+    public void EmitParticle(Vector3 position, Vector3 velocity, Vector3 destination)
     {
         if (activeParticles.Count >= maxParticles) return;
 
-        // Create new particle data if needed
+        // Calculate direction and distance to desired destination
+        Vector3 toDestination = destination - position;
+        float desiredDistance = toDestination.magnitude;
+        
+        // Clamp the destination to maximum distance
+        Vector3 clampedDestination = position + (toDestination.normalized * Mathf.Min(desiredDistance, maxTrajectoryDistance));
+
+        // Create or get particle from pool
         FluidParticle particle;
         if (particlePool.Count < maxParticles)
         {
-            particle = new FluidParticle(position, parameters.particleLifetime);
+            particle = new FluidParticle(position, parameters.particleLifetime, position, clampedDestination);
             particlePool.Add(particle);
         }
         else
         {
-            // Find an inactive particle
             particle = particlePool.Find(p => !p.isActive);
             if (particle == null) return;
+            
+            // Reset particle
+            particle.position = position;
+            particle.origin = position;
+            particle.destination = clampedDestination;
+            particle.hasReachedDestination = false;
+            particle.lifetime = parameters.particleLifetime;
+            particle.isActive = true;
         }
 
-        // Initialize particle
-        particle.position = position;
+        // Initialize movement
         particle.velocity = velocity * emissionForce;
-        particle.force = Vector3.zero;
-        particle.density = 0f;
-        particle.pressure = 0f;
-        particle.lifetime = parameters.particleLifetime;
-        particle.isActive = true;
+        particle.journeyDistance = Vector3.Distance(position, clampedDestination);
 
-        // Get or create visual
+        // Create or get visual
         GameObject visual;
         if (visualPool.Count > 0)
         {
@@ -255,20 +305,177 @@ public class SPHSimulation : MonoBehaviour
         }
     }
 
-    private void UpdatePositions()
+   private void UpdatePositions()
+{
+    float dt = Time.deltaTime;
+
+    for (int i = activeParticles.Count - 1; i >= 0; i--)
     {
-        float dt = Time.deltaTime;
-
-        for (int i = 0; i < activeParticles.Count; i++)
+        FluidParticle p = activeParticles[i];
+        
+        // Check if we've reached destination
+        Vector3 originalToDestination = p.destination - p.origin;
+        Vector3 currentToDestination = p.destination - p.position;
+        float dotProduct = Vector3.Dot(originalToDestination.normalized, currentToDestination.normalized);
+        
+        // Ensure transition to falling state
+        if (!p.hasReachedDestination && (dotProduct < 0 || Vector3.Distance(p.position, p.destination) < 0.1f))
         {
-            FluidParticle p = activeParticles[i];
-            p.velocity += (p.force / p.density) * dt;
-            p.velocity *= parameters.damping;
-            p.position += p.velocity * dt;
+            p.hasReachedDestination = true;
+            p.position = new Vector3(p.destination.x, p.position.y, p.position.z); // Only snap X coordinate
+            // Initialize falling velocity
+            p.velocity = new Vector3(0, -1f, 0); // Give initial downward velocity
+            p.force = Vector3.down * fallSpeed;
+        }
 
-            // Update visual position
+        if (!p.hasReachedDestination)
+        {
+            // Normal trajectory following
+            Vector3 directionToDestination = (p.destination - p.position).normalized;
+            Vector3 randomOffset = Random.insideUnitSphere * pathWidth;
+            Vector3 targetDirection = (directionToDestination + randomOffset.normalized * 0.1f).normalized;
+            
+            p.force = targetDirection;
+            p.velocity = Vector3.Lerp(p.velocity, targetDirection * emissionForce, dt * 5f);
+        }
+        else
+        {
+            // Enhanced falling behavior
+            p.force = Vector3.down * fallSpeed;
+            // Gradually reduce horizontal velocity
+            float horizontalDamping = 0.95f;
+            p.velocity.x *= horizontalDamping;
+            p.velocity.z *= horizontalDamping;
+            
+            // Ensure there's always downward acceleration
+            p.velocity += Vector3.down * fallSpeed * dt;
+        }
+
+        // Update velocity and position
+        p.velocity += (p.force / p.density) * dt;
+        Vector3 newPosition = p.position + p.velocity * dt;
+
+        if (CheckCollision(p.position, newPosition, out RaycastHit2D hit))
+        {
+            HandleOriginalInteractions(hit, i);
+            continue;
+        }
+
+        p.position = newPosition;
+        if (i < activeVisuals.Count)
+        {
             activeVisuals[i].transform.position = p.position;
         }
+    }
+}
+
+    private bool CheckCollision(Vector3 currentPos, Vector3 newPos, out RaycastHit2D hit)
+    {
+        Vector2 direction = (newPos - currentPos).normalized;
+        float distance = Vector2.Distance(currentPos, newPos);
+        
+        LayerMask combinedLayers = boostSurfaces | enemyLayer | waterPlatform | 
+                                  breakableWall | waterPushableLayer | fireLayer | 
+                                  particleCollisionMask;
+
+        hit = Physics2D.BoxCast(
+            currentPos,
+            raycastSize,
+            0f, // No rotation
+            direction,
+            distance,
+            combinedLayers
+        );
+
+        return hit.collider != null;
+    }
+
+    private void HandleOriginalInteractions(RaycastHit2D hit, int particleIndex)
+    {
+        bool shouldDestroyParticle = false;
+
+        if (((1 << hit.collider.gameObject.layer) & waterPlatform) != 0)
+        {
+            if (hit.collider.TryGetComponent<WaterPlatform>(out var platform))
+            {
+                platform.SetColliderState(true);
+                shouldDestroyParticle = true;
+                
+                if (hit.collider.enabled)
+                {
+                    ApplyPlayerBoost();
+                }
+            }
+        }
+        else if (((1 << hit.collider.gameObject.layer) & boostSurfaces) != 0)
+        {
+            ApplyPlayerBoost();
+            shouldDestroyParticle = true;
+        }
+        else if (((1 << hit.collider.gameObject.layer) & breakableWall) != 0)
+        {
+            if (hit.collider.TryGetComponent<BreakableWall>(out var destructible))
+            {
+                destructible.TakeDamage(Time.deltaTime);
+                shouldDestroyParticle = true;
+            }
+        }
+        else if (((1 << hit.collider.gameObject.layer) & enemyLayer) != 0)
+        {
+            if (hit.collider.TryGetComponent<Behaviour>(out var enemyScript))
+            {
+                enemyScript.TakeDamage(Time.deltaTime);
+                shouldDestroyParticle = true;
+            }
+        }
+        else if (((1 << hit.collider.gameObject.layer) & waterPushableLayer) != 0)
+        {
+            if (hit.collider.TryGetComponent<Box>(out var pushable))
+            {
+                pushable.ApplyWaterForce(activeParticles[particleIndex].origin);
+                shouldDestroyParticle = true;
+            }
+        }
+        else if (((1 << hit.collider.gameObject.layer) & fireLayer) != 0)
+        {
+            if (hit.collider.TryGetComponent<Fire>(out var fireScript))
+            {
+                fireScript.Extinguish(Time.deltaTime);
+                shouldDestroyParticle = true;
+            }
+        }
+        else if (((1 << hit.collider.gameObject.layer) & particleCollisionMask) != 0)
+        {
+            shouldDestroyParticle = true;
+        }
+
+        if (shouldDestroyParticle)
+        {
+            RemoveParticle(particleIndex);
+        }
+    }
+
+    private void RemoveParticle(int index)
+    {
+        if (index >= 0 && index < activeParticles.Count)
+        {
+            GameObject visual = activeVisuals[index];
+            visual.SetActive(false);
+            visualPool.Enqueue(visual);
+
+            activeParticles[index].isActive = false;
+            activeParticles.RemoveAt(index);
+            activeVisuals.RemoveAt(index);
+        }
+    }
+
+    private void ApplyPlayerBoost()
+    {
+        playerScript.SwitchHorizLock(true);
+        Vector2 boostDirection = -(cursor.position - transform.position).normalized;
+        float finalBoostForce = boostForce;
+        
+        playerRigidbody.AddForce(boostDirection * finalBoostForce, ForceMode2D.Impulse);
     }
 
     private void UpdateParticlesAndLifetime()
