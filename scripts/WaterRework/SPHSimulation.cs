@@ -10,11 +10,11 @@ public class FluidParticle
     public float pressure;
     public float lifetime;
     public bool isActive;
+    public bool hasReachedDestination;
+    public bool hasCollided;
     
-    // Trajectory control
     public Vector3 origin;
     public Vector3 destination;
-    public bool hasReachedDestination;
     public float journeyDistance;
 
     public FluidParticle(Vector3 pos, float maxLifetime, Vector3 orig, Vector3 dest)
@@ -26,10 +26,11 @@ public class FluidParticle
         pressure = 0f;
         lifetime = maxLifetime;
         isActive = true;
+        hasReachedDestination = false;
+        hasCollided = false;
         
         origin = orig;
         destination = dest;
-        hasReachedDestination = false;
         journeyDistance = Vector3.Distance(orig, dest);
     }
 }
@@ -45,6 +46,9 @@ public struct SPHParameters
     public float damping;
     public Vector3 gravity;
     public float particleLifetime;
+    public float pathWidth;
+    public float emissionForce;
+    public float fallSpeed;
 }
 
 public class SPHSimulation : MonoBehaviour
@@ -106,6 +110,7 @@ public class SPHSimulation : MonoBehaviour
 
     [Header("Trajectory Control")]
 [SerializeField] private float maxTrajectoryDistance = 10f; // Add this variable
+[SerializeField] private float minPathFollowDistance = 2f;
 [SerializeField] private float fallSpeed = 9.81f;
 [SerializeField] private float pathWidth = 0.1f;
 [SerializeField] private LayerMask collisionMask;
@@ -181,43 +186,56 @@ public class SPHSimulation : MonoBehaviour
     }
     */
 
-    
+    [Header("Offset Control")]
+[SerializeField] private float cursorOffset = 2f; // Adjust this value to control the overshoot
+[SerializeField] private bool visualizeOffset = true; // For debugging
 
     public void EmitParticle(Vector3 position, Vector3 velocity, Vector3 destination)
     {
         if (activeParticles.Count >= maxParticles) return;
 
-        // Calculate direction and distance to desired destination
-        Vector3 toDestination = destination - position;
-        float desiredDistance = toDestination.magnitude;
+    // Calculate original distance and direction
+    Vector3 toDestination = destination - position;
+    float originalDistance = toDestination.magnitude;
+    Vector3 direction = toDestination.normalized;
+    
+    // Simply subtract the offset from the original distance
+    //float adjustedDistance = Mathf.Max(originalDistance - cursorOffset, minPathFollowDistance);
+    float dynamicOffset = GetDynamicOffset(originalDistance);
+float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFollowDistance);
+    
+    // Calculate new destination using adjusted distance
+    Vector3 adjustedDestination = position + (direction * adjustedDistance);
+
+    // Create or get particle from pool
+    FluidParticle particle;
+    if (particlePool.Count < maxParticles)
+    {
+        particle = new FluidParticle(position, parameters.particleLifetime, position, adjustedDestination);
+        particlePool.Add(particle);
+    }
+    else
+    {
+        particle = particlePool.Find(p => !p.isActive);
+        if (particle == null) return;
         
-        // Clamp the destination to maximum distance
-        Vector3 clampedDestination = position + (toDestination.normalized * Mathf.Min(desiredDistance, maxTrajectoryDistance));
+        // Reset particle
+        particle.position = position;
+        particle.origin = position;
+        particle.destination = adjustedDestination;
+        particle.hasReachedDestination = false;
+        particle.hasCollided = false;
+        particle.lifetime = parameters.particleLifetime;
+        particle.isActive = true;
+    }
 
-        // Create or get particle from pool
-        FluidParticle particle;
-        if (particlePool.Count < maxParticles)
-        {
-            particle = new FluidParticle(position, parameters.particleLifetime, position, clampedDestination);
-            particlePool.Add(particle);
-        }
-        else
-        {
-            particle = particlePool.Find(p => !p.isActive);
-            if (particle == null) return;
-            
-            // Reset particle
-            particle.position = position;
-            particle.origin = position;
-            particle.destination = clampedDestination;
-            particle.hasReachedDestination = false;
-            particle.lifetime = parameters.particleLifetime;
-            particle.isActive = true;
-        }
+    // Initialize velocity
+    particle.velocity = velocity * emissionForce;
+    particle.journeyDistance = adjustedDistance;
 
-        // Initialize movement
+        /* Initialize movement
         particle.velocity = velocity * emissionForce;
-        particle.journeyDistance = Vector3.Distance(position, clampedDestination);
+        particle.journeyDistance = Vector3.Distance(position, clampedDestination); */
 
         // Create or get visual
         GameObject visual;
@@ -237,6 +255,21 @@ public class SPHSimulation : MonoBehaviour
         activeVisuals.Add(visual);
     }
 
+    float GetDynamicOffset(float distance)
+{
+    if (distance <= 5f)
+    {
+        return cursorOffset; // Full offset for close distances
+    }
+    else
+    {
+        // Gradually reduce offset for longer distances
+        float t = (distance - 5f) / 2f; // Transition over 2 units
+        t = Mathf.Clamp01(t);
+        return Mathf.Lerp(cursorOffset, cursorOffset * 0.5f, t);
+    }
+}
+
     private void Update()
     {
         if (activeParticles.Count == 0) return;
@@ -245,6 +278,9 @@ public class SPHSimulation : MonoBehaviour
         ComputeForces();
         UpdatePositions();
         UpdateParticlesAndLifetime();
+
+        float distanceFromStart = Vector3.Distance(transform.position, cursor.position);
+        Debug.Log(distanceFromStart);
     }
 
     private void ComputeDensityPressure()
@@ -305,62 +341,70 @@ public class SPHSimulation : MonoBehaviour
         }
     }
 
-   private void UpdatePositions()
+  private void UpdatePositions()
 {
     float dt = Time.deltaTime;
+    float maxPathDistance = parameters.smoothingRadius * 100f; // Adjust this multiplier as needed
 
     for (int i = activeParticles.Count - 1; i >= 0; i--)
     {
         FluidParticle p = activeParticles[i];
         
-        // Check if we've reached destination
-        Vector3 originalToDestination = p.destination - p.origin;
-        Vector3 currentToDestination = p.destination - p.position;
-        float dotProduct = Vector3.Dot(originalToDestination.normalized, currentToDestination.normalized);
+        float distanceFromStart = Vector3.Distance(p.origin, p.position);
+        Vector3 directionToDestination = (p.destination - p.position).normalized;
         
-        // Ensure transition to falling state
-        if (!p.hasReachedDestination && (dotProduct < 0 || Vector3.Distance(p.position, p.destination) < 0.1f))
+        if (!p.hasReachedDestination && distanceFromStart < maxPathDistance)
         {
-            p.hasReachedDestination = true;
-            p.position = new Vector3(p.destination.x, p.position.y, p.position.z); // Only snap X coordinate
-            // Initialize falling velocity
-            p.velocity = new Vector3(0, -1f, 0); // Give initial downward velocity
-            p.force = Vector3.down * fallSpeed;
-        }
-
-        if (!p.hasReachedDestination)
-        {
-            // Normal trajectory following
-            Vector3 directionToDestination = (p.destination - p.position).normalized;
+            // Get target point along the path with controlled variation
+            Vector3 targetPoint = p.origin + (p.destination - p.origin).normalized * distanceFromStart;
             Vector3 randomOffset = Random.insideUnitSphere * pathWidth;
-            Vector3 targetDirection = (directionToDestination + randomOffset.normalized * 0.1f).normalized;
-            
-            p.force = targetDirection;
-            p.velocity = Vector3.Lerp(p.velocity, targetDirection * emissionForce, dt * 5f);
+            randomOffset.z = 0; // Keep it 2D
+            targetPoint += randomOffset;
+
+            // Calculate path following force
+            Vector3 towardsPath = (targetPoint - p.position);
+            p.force = towardsPath * emissionForce;
+
+            // Smooth velocity transition
+            Vector3 desiredVelocity = directionToDestination * emissionForce;
+            p.velocity = Vector3.Lerp(p.velocity, desiredVelocity, dt * 5f);
+
+            // Check if we should transition to falling
+            if (Vector3.Distance(p.position, p.destination) < 0.1f)
+            {
+                p.hasReachedDestination = true;
+            }
         }
         else
         {
-            // Enhanced falling behavior
+            // Falling state with smooth transition
+            p.hasReachedDestination = true;
+            
+            // Apply gravity gradually
             p.force = Vector3.down * fallSpeed;
-            // Gradually reduce horizontal velocity
-            float horizontalDamping = 0.95f;
+            
+            // Smooth horizontal velocity dampening
+            float horizontalDamping = 0.99f;
             p.velocity.x *= horizontalDamping;
             p.velocity.z *= horizontalDamping;
             
-            // Ensure there's always downward acceleration
-            p.velocity += Vector3.down * fallSpeed * dt;
+            // Gradual vertical velocity adjustment
+            float targetFallSpeed = -fallSpeed;
+            p.velocity.y = Mathf.Lerp(p.velocity.y, targetFallSpeed, dt * 2f);
         }
 
-        // Update velocity and position
+        // Update final velocity and position
         p.velocity += (p.force / p.density) * dt;
         Vector3 newPosition = p.position + p.velocity * dt;
 
+        // Handle collisions
         if (CheckCollision(p.position, newPosition, out RaycastHit2D hit))
         {
             HandleOriginalInteractions(hit, i);
             continue;
         }
 
+        // Update position and visual representation
         p.position = newPosition;
         if (i < activeVisuals.Count)
         {
@@ -450,9 +494,10 @@ public class SPHSimulation : MonoBehaviour
         }
 
         if (shouldDestroyParticle)
-        {
-            RemoveParticle(particleIndex);
-        }
+    {
+        // Instead of removing immediately, mark as collided and start lifetime countdown
+        activeParticles[particleIndex].hasCollided = true;
+    }
     }
 
     private void RemoveParticle(int index)
@@ -479,17 +524,22 @@ public class SPHSimulation : MonoBehaviour
     }
 
     private void UpdateParticlesAndLifetime()
+{
+    float dt = Time.deltaTime;
+
+    for (int i = activeParticles.Count - 1; i >= 0; i--)
     {
-        float dt = Time.deltaTime;
+        FluidParticle p = activeParticles[i];
 
-        for (int i = activeParticles.Count - 1; i >= 0; i--)
+        // Only decrease lifetime if particle has collided
+        if (p.hasCollided)
         {
-            activeParticles[i].lifetime -= dt;
+            p.lifetime -= dt;
 
-            if (activeParticles[i].lifetime <= 0)
+            if (p.lifetime <= 0)
             {
                 // Return to pools
-                activeParticles[i].isActive = false;
+                p.isActive = false;
                 GameObject visual = activeVisuals[i];
                 visual.SetActive(false);
                 visualPool.Enqueue(visual);
@@ -500,4 +550,17 @@ public class SPHSimulation : MonoBehaviour
             }
         }
     }
+}
+
+private void OnDrawGizmos()
+{
+    if (visualizeOffset && cursor != null)
+    {
+        Gizmos.color = Color.yellow;
+        Vector3 direction = (cursor.position - transform.position).normalized;
+        Vector3 offsetPoint = cursor.position - (direction * cursorOffset);
+        Gizmos.DrawWireSphere(offsetPoint, 0.1f);
+        Gizmos.DrawLine(transform.position, offsetPoint);
+    }
+}
 }
