@@ -43,7 +43,7 @@ public class WaterSprayer : MonoBehaviour
         }
         else
         {
-            // Refill water storage
+            // Refill water storagea
             currentWaterStorage = Mathf.Min(maxWaterStorage, currentWaterStorage + waterRefillRate * Time.deltaTime);
         }
     }
@@ -52,11 +52,13 @@ public class WaterSprayer : MonoBehaviour
     {
         Vector3 sprayDirection = (cursor.position - transform.position).normalized;
         
-        // Emit a particle
+        // Calculate emission point with spread
+        //Vector3 randomOffset = Random.insideUnitSphere * spraySpread;
         Vector3 emissionPoint = transform.position;
         Vector3 particleVelocity = sprayDirection;
         
-        sphSystem.EmitParticle(emissionPoint, particleVelocity.normalized * sprayForce);
+        // Pass destination point (cursor position) to the particle
+        sphSystem.EmitParticle(emissionPoint, particleVelocity.normalized * sprayForce, cursor.position);
     }
 
     // Input System callback
