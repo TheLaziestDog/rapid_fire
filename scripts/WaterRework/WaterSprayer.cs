@@ -18,7 +18,7 @@ public class WaterSprayer : MonoBehaviour
     private SPHSimulation sphSystem;
     private float currentWaterStorage;
     private float emissionTimer;
-    private bool isSpraying;
+    public bool isSpraying;
 
     private void Awake()
     {
