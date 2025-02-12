@@ -64,6 +64,7 @@ public class SPHSimulation : MonoBehaviour
 
     [Header("External References")]
     [SerializeField] private Transform cursor;
+    [SerializeField] private Transform hoseRotation;
     private BasicMovement playerScript;
     private Rigidbody2D playerRigidbody;
 
@@ -71,6 +72,8 @@ public class SPHSimulation : MonoBehaviour
     [SerializeField] private float hitArea = 1f;
     [SerializeField] private Vector2 raycastSize = new Vector2(0.2f, 0.2f);
     [SerializeField] private float boostForce = 0.1f;
+    private const float MIN_BOOST_MULTIPLIER = 0.1f;
+    private float storedBoostMultiplier;
     
     [Header("Simulation Parameters")]
     [SerializeField] private SPHParameters parameters = new SPHParameters
@@ -109,11 +112,17 @@ public class SPHSimulation : MonoBehaviour
     private Transform particleContainer;
 
     [Header("Trajectory Control")]
-[SerializeField] private float maxTrajectoryDistance = 10f; // Add this variable
-[SerializeField] private float minPathFollowDistance = 2f;
-[SerializeField] private float fallSpeed = 9.81f;
-[SerializeField] private float pathWidth = 0.1f;
-[SerializeField] private LayerMask collisionMask;
+    [SerializeField] private float maxTrajectoryDistance = 10f; // Add this variable
+    [SerializeField] private float minPathFollowDistance = 2f;
+    [SerializeField] private float fallSpeed = 9.81f;
+    [SerializeField] private float pathWidth = 0.1f;
+    [SerializeField] private LayerMask collisionMask;
+
+    // Add these new fields
+    private bool isBoostActive = false;
+    
+    // Add this public property to check spray state from WaterSprayer
+    public bool IsBoostActive => isBoostActive;
 
      private void Awake()
     {
@@ -186,6 +195,7 @@ public class SPHSimulation : MonoBehaviour
     }
     */
 
+
     [Header("Offset Control")]
 [SerializeField] private float cursorOffset = 2f; // Adjust this value to control the overshoot
 [SerializeField] private bool visualizeOffset = true; // For debugging
@@ -193,6 +203,16 @@ public class SPHSimulation : MonoBehaviour
     public void EmitParticle(Vector3 position, Vector3 velocity, Vector3 destination)
     {
         if (activeParticles.Count >= maxParticles) return;
+
+        // Cache direction for consistent boost calculations
+    currentDirection = (cursor.position - transform.position).normalized;
+    
+    float distance = Vector2.Distance(transform.position, cursor.position);
+    storedBoostMultiplier = Mathf.Lerp(
+        MIN_BOOST_MULTIPLIER,
+        1f,
+        1f - Mathf.Clamp01(distance / maxTreshold) // Use maxTreshold instead of maxTrajectoryDistance
+    );
 
     // Calculate original distance and direction
     Vector3 toDestination = destination - position;
@@ -272,6 +292,27 @@ float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFoll
 
     private void Update()
     {
+        WaterSprayer sprayer = GetComponent<WaterSprayer>();
+        
+        // If spray has stopped and we were boosting
+        if ((!sprayer || !sprayer.isSpraying) && isBoostActive)
+        {
+            // Stop upward momentum
+            if (playerRigidbody != null)
+            {
+                Vector2 velocity = playerRigidbody.velocity;
+                if (velocity.y > 0)
+                {
+                    velocity.y *= 0.5f;
+                    playerRigidbody.velocity = velocity;
+                }
+            }
+            
+            // Release horizontal lock
+            playerScript.SwitchHorizLock(false);
+            isBoostActive = false;
+        }
+        
         if (activeParticles.Count == 0) return;
 
         ComputeDensityPressure();
@@ -417,6 +458,7 @@ float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFoll
     {
         Vector2 direction = (newPos - currentPos).normalized;
         float distance = Vector2.Distance(currentPos, newPos);
+        float angle = hoseRotation.eulerAngles.z;
         
         LayerMask combinedLayers = boostSurfaces | enemyLayer | waterPlatform | 
                                   breakableWall | waterPushableLayer | fireLayer | 
@@ -425,7 +467,7 @@ float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFoll
         hit = Physics2D.BoxCast(
             currentPos,
             raycastSize,
-            0f, // No rotation
+            angle,
             direction,
             distance,
             combinedLayers
@@ -437,6 +479,8 @@ float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFoll
     private void HandleOriginalInteractions(RaycastHit2D hit, int particleIndex)
     {
         bool shouldDestroyParticle = false;
+        WaterSprayer sprayer = GetComponent<WaterSprayer>();
+        bool isSprayActive = sprayer != null && sprayer.isSpraying;
 
         if (((1 << hit.collider.gameObject.layer) & waterPlatform) != 0)
         {
@@ -445,7 +489,7 @@ float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFoll
                 platform.SetColliderState(true);
                 shouldDestroyParticle = true;
                 
-                if (hit.collider.enabled)
+                if (hit.collider.enabled && isSprayActive)
                 {
                     ApplyPlayerBoost();
                 }
@@ -453,7 +497,10 @@ float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFoll
         }
         else if (((1 << hit.collider.gameObject.layer) & boostSurfaces) != 0)
         {
-            ApplyPlayerBoost();
+            if (isSprayActive)
+            {
+                ApplyPlayerBoost();
+            }
             shouldDestroyParticle = true;
         }
         else if (((1 << hit.collider.gameObject.layer) & breakableWall) != 0)
@@ -514,13 +561,17 @@ float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFoll
         }
     }
 
+    private Vector2 currentDirection;
+    [SerializeField] private float maxTreshold = 10f;
+
     private void ApplyPlayerBoost()
     {
         playerScript.SwitchHorizLock(true);
-        Vector2 boostDirection = -(cursor.position - transform.position).normalized;
-        float finalBoostForce = boostForce;
+        Vector2 boostDirection = -currentDirection; // Using cached direction as per previous fix
+        float finalBoostForce = boostForce * storedBoostMultiplier;
         
         playerRigidbody.AddForce(boostDirection * finalBoostForce, ForceMode2D.Impulse);
+        isBoostActive = true;
     }
 
     private void UpdateParticlesAndLifetime()
