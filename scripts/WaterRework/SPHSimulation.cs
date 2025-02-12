@@ -53,6 +53,9 @@ public struct SPHParameters
 
 public class SPHSimulation : MonoBehaviour
 {
+    [Header("Camera Shake")]
+    [SerializeField] private CameraFollower cameraFollower;
+    
     [Header("Original Interaction Layers")]
     [SerializeField] private LayerMask boostSurfaces;
     [SerializeField] private LayerMask enemyLayer;
@@ -147,6 +150,7 @@ public class SPHSimulation : MonoBehaviour
         GameObject player = GameObject.FindGameObjectWithTag("Player");
         playerScript = player.GetComponent<BasicMovement>();
         playerRigidbody = player.GetComponent<Rigidbody2D>();
+        cameraFollower = Camera.main.GetComponent<CameraFollower>();
     }
 
     private GameObject CreateParticle()
@@ -311,6 +315,11 @@ float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFoll
             // Release horizontal lock
             playerScript.SwitchHorizLock(false);
             isBoostActive = false;
+
+            if (cameraFollower != null)
+            {
+                cameraFollower.SetBoostScale(false);
+            }
         }
         
         if (activeParticles.Count == 0) return;
@@ -482,6 +491,11 @@ float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFoll
         WaterSprayer sprayer = GetComponent<WaterSprayer>();
         bool isSprayActive = sprayer != null && sprayer.isSpraying;
 
+        if (cameraFollower != null)
+        {
+            cameraFollower.TryShake(hit.point);
+        }
+
         if (((1 << hit.collider.gameObject.layer) & waterPlatform) != 0)
         {
             if (hit.collider.TryGetComponent<WaterPlatform>(out var platform))
@@ -572,6 +586,11 @@ float adjustedDistance = Mathf.Max(originalDistance - dynamicOffset, minPathFoll
         
         playerRigidbody.AddForce(boostDirection * finalBoostForce, ForceMode2D.Impulse);
         isBoostActive = true;
+
+        if (cameraFollower != null)
+        {
+            cameraFollower.SetBoostScale(true);
+        }
     }
 
     private void UpdateParticlesAndLifetime()
