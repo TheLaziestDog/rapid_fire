@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using Unity.VisualScripting;
 using UnityEngine;
 
 public class TBehaviour : MonoBehaviour
@@ -13,19 +14,20 @@ public class TBehaviour : MonoBehaviour
     [Header("Drone Management")]
     [SerializeField] private int maxDroneCount = 5;
     [SerializeField] private int initialDroneCount = 3;
+    [SerializeField] private float deployCooldown = 3f;
     [SerializeField] private GameObject dronePrefab;
     [SerializeField] private Transform droneSpawner;
     [SerializeField] private Transform playerTransform;
 
-    private List<DBehaviour> activeDrones = new List<DBehaviour>(); // Specify List type
+    private List<DBehaviour> activeDrones = new List<DBehaviour>();
     private bool initialDeploymentDone = false;
     private bool maxDronesReached = false;
+    private float nextDeployTime;
 
     [Header("Child Activation")]
     [SerializeField] private GameObject childToActivate;
     [SerializeField] private float activationDuration = 0.5f;
-    [SerializeField] private float activationCooldown = 1f;
-    private bool canActivate = true;
+    private bool isDeploying = false; // New flag to track deployment state
 
     [Header("HP")]
     [SerializeField] private float maxHP = 3f;
@@ -35,6 +37,7 @@ public class TBehaviour : MonoBehaviour
     private void Start()
     {
         currentHP = maxHP;
+        nextDeployTime = Time.time; // Initialize to current time
 
         if (childToActivate != null)
         {
@@ -53,29 +56,84 @@ public class TBehaviour : MonoBehaviour
 
     private void Update()
     {
-        // Clean up null references in active drones list
         activeDrones.RemoveAll(d => d == null);
 
-        // Check if max drone count has been reached
         if (activeDrones.Count >= maxDroneCount)
         {
             maxDronesReached = true;
         }
 
-        // Detect player
         Collider2D playerInSight = GetPlayerInSight();
 
-        // Handle initial drone deployment
+        // Handle initial deployment
         if (playerInSight != null && !initialDeploymentDone && !maxDronesReached)
         {
             StartCoroutine(DeployInitialDrones());
             initialDeploymentDone = true;
+            nextDeployTime = Time.time + deployCooldown; // Set initial cooldown after first deployment
         }
 
-        // If player is in sight and we can activate, deploy more drones if needed
-        if (playerInSight != null && canActivate && childToActivate != null && !maxDronesReached)
+        // Handle regular deployment with cooldown
+        if (playerInSight != null && initialDeploymentDone && !maxDronesReached && !isDeploying)
         {
-            StartCoroutine(DeployDroneRoutine());
+            if (Time.time >= nextDeployTime)
+            {
+                StartCoroutine(DeployDroneWithCooldown());
+            }
+        }
+    }
+
+    private IEnumerator DeployDroneWithCooldown()
+    {
+        isDeploying = true;
+        DeployMoreDrones();
+        nextDeployTime = Time.time + deployCooldown;
+        yield return new WaitForSeconds(activationDuration);
+        isDeploying = false;
+    }
+
+    private IEnumerator DeployInitialDrones()
+    {
+        for (int i = 0; i < initialDroneCount; i++)
+        {
+            if (!maxDronesReached)
+            {
+                yield return new WaitForSeconds(0.2f);
+                StartCoroutine(DeployDroneRoutine());
+            }
+            else
+            {
+                yield break;
+            }
+        }
+    }
+
+    private IEnumerator DeployDroneRoutine()
+    {
+        if (maxDronesReached)
+        {
+            yield break;
+        }
+
+        if (childToActivate != null)
+        {
+            childToActivate.SetActive(true);
+            yield return new WaitForSeconds(activationDuration);
+            childToActivate.SetActive(false);
+        }
+
+        GameObject droneObj = Instantiate(dronePrefab, droneSpawner.position, Quaternion.identity);
+        DBehaviour droneBehaviour = droneObj.GetComponent<DBehaviour>();
+
+        if (droneBehaviour != null && playerTransform != null)
+        {
+            activeDrones.Add(droneBehaviour);
+            droneBehaviour.SetTurret(this);
+
+            if (activeDrones.Count >= maxDroneCount)
+            {
+                maxDronesReached = true;
+            }
         }
     }
 
@@ -94,67 +152,6 @@ public class TBehaviour : MonoBehaviour
             }
         }
         return null;
-    }
-
-    private IEnumerator DeployInitialDrones()
-    {
-        for (int i = 0; i < initialDroneCount; i++)
-        {
-            if (!maxDronesReached) // Check before each deployment
-            {
-                yield return new WaitForSeconds(0.2f);
-                StartCoroutine(DeployDroneRoutine());
-            }
-            else
-            {
-                yield break; // Exit coroutine if max reached
-            }
-        }
-    }
-
-    private IEnumerator DeployDroneRoutine()
-    {
-        // Immediately check if max has been reached
-        if (maxDronesReached)
-        {
-            yield break; // Exit coroutine if max reached
-        }
-
-        // Set cooldown flag
-        canActivate = false;
-
-        // Activate child (visual effect)
-        if (childToActivate != null)
-        {
-            childToActivate.SetActive(true);
-            yield return new WaitForSeconds(activationDuration);
-            childToActivate.SetActive(false);
-        }
-
-        // Instantiate the drone
-        GameObject droneObj = Instantiate(dronePrefab, droneSpawner.position, Quaternion.identity);
-
-        // Get the drone behavior component
-        DBehaviour droneBehaviour = droneObj.GetComponent<DBehaviour>();
-
-        // Initialize the drone
-        if (droneBehaviour != null && playerTransform != null)
-        {
-            // Add to active drones list
-            activeDrones.Add(droneBehaviour);
-            droneBehaviour.SetTurret(this);
-
-            // Check if max has now been reached after adding the new drone
-            if (activeDrones.Count >= maxDroneCount)
-            {
-                maxDronesReached = true;
-            }
-        }
-
-        yield return new WaitForSeconds(activationCooldown);
-
-        // Reset cooldown flag
-        canActivate = true;
     }
 
     public List<DBehaviour> GetActiveDrones()
