@@ -1,30 +1,50 @@
 using UnityEngine;
 using Pathfinding;
 using System.Collections.Generic;
+using System.Collections;
 using System.Linq;
 
 public class DBehaviour : MonoBehaviour
 {
     [SerializeField] private float speed = 5f;
-    [SerializeField] private float distanceLimit = 10f;
+    [Header("Range")]
+    [SerializeField] private float attackRange = 5;
     [SerializeField] private float lineOfSight = 5f;
+
     [Header("HP")]
     [SerializeField] private float currentHP = 100;
     [SerializeField] private float damage = 1f;
+    [Header("Attack")]
+    [SerializeField] private float fireRate = 1f;
+    private float nextFireTime = 0f;
+
     [Header("Spacing")]
+    [SerializeField] private float distanceLimit = 10f;
     [SerializeField] private float minimumDroneDistance = 2f;
     [SerializeField] private float heightOffset = 2f;
-    [SerializeField] private float retreatMultiplier = 1.5f; // How far the drone should move when retreating
+    [SerializeField] private float retreatMultiplier = 1.5f;
+
+    [Header("Patrol")]
+    [SerializeField] private float patrolObstacleCheckDistance = 2f; // Distance to check for obstacles
+    [SerializeField] private LayerMask obstacleLayer; // Layer mask for obstacles
     
     private AIPath path;
     private Transform target;
     private float targetDistance;
     private TBehaviour turret;
+    private Animator animator;
+    public Shoot shoot;
+    private Vector2 patrolCenterPosition;
+    private int patrolDirection = -1;
+    private Vector3 desiredPosition;
 
     private void Start()
     {
+        animator = GetComponent<Animator>();
         path = GetComponent<AIPath>();
         target = GameObject.FindGameObjectWithTag("Player").GetComponent<Transform>();
+        patrolCenterPosition = transform.position; // Store initial position as patrol center
+
         if (target == null)
         {
             Debug.LogError("Player not found. Make sure the Player has the 'Player' tag.");
@@ -35,6 +55,7 @@ public class DBehaviour : MonoBehaviour
             Debug.LogError("AIPath component not found. Please add it to this GameObject.");
             enabled = false;
         }
+        animator.SetBool("isShooting", false);
     }
 
     private void Update()
@@ -43,23 +64,64 @@ public class DBehaviour : MonoBehaviour
         
         targetDistance = Vector2.Distance(transform.position, target.position);
         path.maxSpeed = speed;
-
-        Vector3 desiredPosition;
         
-        if (targetDistance < distanceLimit) // Too close to player
+        if (targetDistance < distanceLimit)
         {
             desiredPosition = CalculateRetreatPosition();
         }
-        else if (targetDistance < lineOfSight) // Within acceptable range
+        else if (targetDistance < lineOfSight)
         {
             desiredPosition = CalculateDesiredPosition();
         }
-        else // Too far from player
+        else
         {
-            desiredPosition = transform.position;
+            Patrol();
+        }
+
+        if (targetDistance <= attackRange){
+            if (Time.time >= nextFireTime){
+                StartCoroutine(shootTarget());
+                nextFireTime = Time.time + 1f / fireRate;
+            }
         }
 
         path.destination = desiredPosition;
+    }
+
+    private void Patrol()
+    {
+        // Check for obstacles on both sides
+        RaycastHit2D leftHit = Physics2D.Raycast(transform.position, Vector2.left, lineOfSight, obstacleLayer);
+        RaycastHit2D rightHit = Physics2D.Raycast(transform.position, Vector2.right, lineOfSight, obstacleLayer);
+
+        // Calculate distances to obstacles (if they exist)
+        float leftDistance = leftHit.collider != null ? leftHit.distance : float.MaxValue;
+        float rightDistance = rightHit.collider != null ? rightHit.distance : float.MaxValue;
+
+        // Change direction if too close to an obstacle
+        if (leftDistance <= patrolObstacleCheckDistance || rightDistance <= patrolObstacleCheckDistance)
+        {
+            // If obstacle is closer on the left, move right (and vice versa)
+            patrolDirection = (leftDistance < rightDistance) ? 1 : -1;
+        }
+        // Change direction if reached patrol limit
+        else if (Mathf.Abs(transform.position.x - patrolCenterPosition.x) >= lineOfSight)
+        {
+            patrolDirection *= -1;
+            patrolCenterPosition = transform.position; // Update patrol center
+        }
+
+        // Move the drone
+        Vector2 movement = new Vector2(patrolDirection * speed * Time.deltaTime, 0);
+        transform.Translate(movement);
+        desiredPosition = transform.position;
+    }
+
+    private IEnumerator shootTarget(){
+        animator.SetBool("isShooting", true);
+        yield return new WaitForSeconds(1.5f);
+        shoot.justShoot(target, 4);
+        animator.SetBool("isShooting", false);
     }
 
     private Vector3 CalculateRetreatPosition()
@@ -149,12 +211,28 @@ public class DBehaviour : MonoBehaviour
 
     private void OnDrawGizmos()
     {
+        // Existing gizmos
         Gizmos.color = Color.green;
         Gizmos.DrawWireSphere(transform.position, lineOfSight);
+
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireSphere(transform.position, attackRange);
         
-        // Add visualization for minimum distance
         Gizmos.color = Color.red;
         Gizmos.DrawWireSphere(transform.position, distanceLimit);
+
+        // New patrol obstacle detection gizmos
+        if (Application.isPlaying)
+        {
+            // Draw patrol obstacle detection rays
+            Gizmos.color = Color.blue;
+            Gizmos.DrawRay(transform.position, Vector2.left * lineOfSight);
+            Gizmos.DrawRay(transform.position, Vector2.right * lineOfSight);
+
+            // Draw minimum obstacle distance threshold
+            Gizmos.color = Color.cyan;
+            Gizmos.DrawWireSphere(transform.position, patrolObstacleCheckDistance);
+        }
     }
 
     public void SetTurret(TBehaviour turret)
